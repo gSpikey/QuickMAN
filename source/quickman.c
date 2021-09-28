@@ -58,10 +58,11 @@
 // Todo: Fix palette locking/inverted indicator- can be confusing
 
 #define STRICT
-#define WIN32_LEAN_AND_MEAN
-#define _WIN32_WINNT 0x501 // Windows XP
+//#define WIN32_LEAN_AND_MEAN
+//#define _WIN32_WINNT 0x501 // Windows XP
 
 #include <windows.h>
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <mmsystem.h> // for timer functions
@@ -3032,6 +3033,65 @@ void init_man(void)
 
 // ----------------------- GUI / misc functions -----------------------------------
 
+
+
+int GetNumberOfLogicalProcessors()
+{
+    LOGICAL_PROCESSOR_RELATIONSHIP rt = RelationAll;
+
+    DWORD dw = 0;
+    int num_logical_cores = 0;
+    GetLogicalProcessorInformationEx(rt, NULL, &dw);
+    if (dw)
+    {
+        void *mem = malloc(dw);
+        PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX b = (PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX)mem;
+        if (GetLogicalProcessorInformationEx(rt, b, &dw))
+        {
+            char buff[256];
+            while (dw)
+            {
+                int bytes = b->Size;
+                if (b->Relationship == RelationProcessorCore)
+                {
+                    int cpu = 0;
+                    if (b->Processor.GroupMask[cpu].Mask)
+                    {
+                        KAFFINITY mask = b->Processor.GroupMask[cpu].Mask;
+                        int Numbits2check = sizeof(KAFFINITY) * 8 + 1;
+                        unsigned __int64 bit = 1;
+                        while (--Numbits2check)
+                        {
+                            if (mask & bit)
+                                num_logical_cores++;
+                            bit = bit << 1;
+
+                        }
+                    }
+                }
+                b = (PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX)((char*)b + bytes);
+                dw -= bytes;
+            }
+            sprintf(buff, "Num logical cores = %d", num_logical_cores);
+            //if (num_logical_cores >= 64)
+            //    MessageBox(NULL, buff, "Nice CPU you have there", MB_OK);
+
+
+        }
+        free(mem);
+    }
+   
+    if (num_logical_cores < 16)
+    {
+        SYSTEM_INFO info; 
+        memset(&info, 0, sizeof(info));
+        GetSystemInfo(&info);
+        num_logical_cores = info.dwNumberOfProcessors;
+    }
+    return num_logical_cores;
+}
+
+
 // Detect whether the CPU supports SSE2 and conditional move instructions; used to
 // set algorithms. Also detect the number of cores
 
@@ -3043,7 +3103,7 @@ void get_cpu_info(void)
 {
    unsigned vendor[4];
    unsigned features;
-   SYSTEM_INFO info;
+   
    man_calc_struct *m;
 
    m = &main_man_calc_struct;
@@ -3093,8 +3153,9 @@ void get_cpu_info(void)
 
    // Set the default number of threads to the number of cores. Does this count a hyperthreading
    // single core as more than one core? Should ignore these as hyperthreading won't help.
-   GetSystemInfo(&info);
-   num_threads = info.dwNumberOfProcessors;
+   // Well, turns out, that for higher core counts like the AMD3970X using 64 threads gives better performance than 32 threads
+   
+   num_threads = GetNumberOfLogicalProcessors();
 
    // Convert number of threads (cores) to a selection index for the dropdown box
 
@@ -3104,6 +3165,10 @@ void get_cpu_info(void)
          break;
 
    num_threads = 1 << num_threads_ind;
+
+
+
+   
 }
 
 // Allocate all the memory needed by the calculation engine. This needs to be called
@@ -3816,6 +3881,60 @@ unsigned __stdcall do_save(LPVOID param)
    return 1;
 }
 
+
+void No_ReallyGetWindowRect(HWND hwnd, HWND parenthwnd, RECT *rect /*, BOOL bHasMenu=FALSE*/)
+{
+    GetWindowRect(hwnd, rect); // get adjusted dialog rect
+    AdjustWindowRect(rect, GetWindowLongA(parenthwnd, GWL_STYLE), FALSE);
+}
+
+
+
+
+void GetTrueWindowsVersion(OSVERSIONINFOEX* pOSversion)
+{
+    // Function pointer to driver function
+    NTSTATUS(WINAPI * pRtlGetVersion)(PRTL_OSVERSIONINFOW lpVersionInformation) = NULL;
+
+    // load the System-DLL
+    HINSTANCE hNTdllDll = LoadLibrary("ntdll.dll");
+
+    // successfully loaded?
+    if (hNTdllDll != NULL)
+    {
+        // get the function pointer to RtlGetVersion
+        pRtlGetVersion = (NTSTATUS(WINAPI*)(PRTL_OSVERSIONINFOW))GetProcAddress(hNTdllDll, "RtlGetVersion");
+
+        // if successfull then read the function
+        if (pRtlGetVersion != NULL)
+            pRtlGetVersion((PRTL_OSVERSIONINFOW)pOSversion);
+
+        // free the library
+        FreeLibrary(hNTdllDll);
+    } // if (hNTdllDll != NULL)
+
+    // if function failed, use fallback to old version
+    if (pRtlGetVersion == NULL)
+        GetVersionEx((OSVERSIONINFO*)pOSversion);
+
+    
+    return ;
+} // GetTrueWindowsVersion
+
+BOOL bIsWin10()
+{
+    OSVERSIONINFOEX os;
+    memset(&os, 0, sizeof(os));
+    GetTrueWindowsVersion(&os);
+    if (os.dwMajorVersion == 10)
+        return TRUE;
+    return FALSE;
+
+
+
+}
+
+
 // Handler for the control dialog box. How do we make this stop blocking the rest of the
 // code when the user is moving it?
 INT_PTR CALLBACK man_dialog_proc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) // sdiag
@@ -3841,112 +3960,117 @@ INT_PTR CALLBACK man_dialog_proc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPa
 
    switch (uMsg)
    {
-      case WM_INITDIALOG:
+   case WM_INITDIALOG:
 
-         // Initialize all dialog box fields
-         SetDlgItemInt(hwnd, IDC_ITERS, m->max_iters, FALSE);
-         SendDlgItemMessage(hwnd, IDC_PAN_RATE, TBM_SETRANGE, TRUE, MAKELONG(0, MAX_PAN_RATE));
-         SendDlgItemMessage(hwnd, IDC_ZOOM_RATE, TBM_SETRANGE, TRUE, MAKELONG(0, MAX_ZOOM_RATE));
-         init_combo_box(hwnd, IDC_PRECISION, precision_strs, NUM_ELEM(precision_strs), m->precision);
-         init_combo_box(hwnd, IDC_PALETTE, palette_strs, NUM_ELEM(palette_strs), m->palette);
-         init_combo_box(hwnd, IDC_RENDERING, rendering_strs, NUM_ELEM(rendering_strs), m->rendering_alg);
-         init_combo_box(hwnd, IDC_ALGORITHM, alg_strs, NUM_ELEM(alg_strs), m->alg);
-         init_combo_box(hwnd, IDC_THREADS, num_threads_strs, MAX_THREADS_IND + 1, num_threads_ind);
-         init_combo_box(hwnd, IDC_LOGFILE, file_strs, NUM_ELEM(file_strs), 0);
+       // Initialize all dialog box fields
+       SetDlgItemInt(hwnd, IDC_ITERS, m->max_iters, FALSE);
+       SendDlgItemMessage(hwnd, IDC_PAN_RATE, TBM_SETRANGE, TRUE, MAKELONG(0, MAX_PAN_RATE));
+       SendDlgItemMessage(hwnd, IDC_ZOOM_RATE, TBM_SETRANGE, TRUE, MAKELONG(0, MAX_ZOOM_RATE));
+       init_combo_box(hwnd, IDC_PRECISION, precision_strs, NUM_ELEM(precision_strs), m->precision);
+       init_combo_box(hwnd, IDC_PALETTE, palette_strs, NUM_ELEM(palette_strs), m->palette);
+       init_combo_box(hwnd, IDC_RENDERING, rendering_strs, NUM_ELEM(rendering_strs), m->rendering_alg);
+       init_combo_box(hwnd, IDC_ALGORITHM, alg_strs, NUM_ELEM(alg_strs), m->alg);
+       init_combo_box(hwnd, IDC_THREADS, num_threads_strs, MAX_THREADS_IND + 1, num_threads_ind);
+       init_combo_box(hwnd, IDC_LOGFILE, file_strs, NUM_ELEM(file_strs), 0);
 
-         // default save filename- later have this scan for next available
-         SetWindowText(GetDlgItem(hwnd, IDC_SAVEFILE), savefile);
+       // default save filename- later have this scan for next available
+       SetWindowText(GetDlgItem(hwnd, IDC_SAVEFILE), savefile);
 
-         // Set tab stops for the INFO window
-         SendDlgItemMessage(hwnd, IDC_INFO, EM_SETTABSTOPS, 1, (LPARAM) &tab_spacing);
+       // Set tab stops for the INFO window
+       SendDlgItemMessage(hwnd, IDC_INFO, EM_SETTABSTOPS, 1, (LPARAM)&tab_spacing);
 
-         // If any of these are null, the system has major problems
-         hwnd_iters = GetDlgItem(hwnd, IDC_ITERS);
-         hwnd_info = GetDlgItem(hwnd, IDC_INFO);
-         hwnd_status = GetDlgItem(hwnd, IDC_STATUS);
-         hwnd_status2 = GetDlgItem(hwnd, IDC_STATUS2);
-         hwnd_thumbnail_frame = GetDlgItem(hwnd, IDC_THUMBNAIL_FRAME); // v1.10: now an invisible dummy item
+       // If any of these are null, the system has major problems
+       hwnd_iters = GetDlgItem(hwnd, IDC_ITERS);
+       hwnd_info = GetDlgItem(hwnd, IDC_INFO);
+       hwnd_status = GetDlgItem(hwnd, IDC_STATUS);
+       hwnd_status2 = GetDlgItem(hwnd, IDC_STATUS2);
+       hwnd_thumbnail_frame = GetDlgItem(hwnd, IDC_THUMBNAIL_FRAME); // v1.10: now an invisible dummy item
 
-         // PNG save and Preserve aspect ratio buttons checked by default
-         SendDlgItemMessage(hwnd, IDC_PNG, BM_SETCHECK, BST_CHECKED, 0);
-         SendDlgItemMessage(hwnd, IDC_ASPECT, BM_SETCHECK, BST_CHECKED, 0);
+       // PNG save and Preserve aspect ratio buttons checked by default
+       SendDlgItemMessage(hwnd, IDC_PNG, BM_SETCHECK, BST_CHECKED, 0);
+       SendDlgItemMessage(hwnd, IDC_ASPECT, BM_SETCHECK, BST_CHECKED, 0);
 
-         // Adjust dialog box to compensate for different border and font sizes. What a pain...
+       // windows 10 doesn't appear to have these issues with dialog box font size
+       if (bIsWin10())
+           return FALSE;
 
-         // To simulate Vista large fonts on XP: set font size to large, set lpix_per_inch to
-         // 120, and change "MS Shell Dlg" font size to 10 in quickman.rc. Seems almost exact.
-         // lpix_per_inch = 120;
 
-         // The seems to be no documented function to help figure out how a dialog box width
-         // should scale with font size. The calc. below usually turns out too wide. Will be
-         // corrected in an iterative process below...
+       // Adjust dialog box to compensate for different border and font sizes. What a pain...
 
-         dialog_w = (lpix_per_inch * (ORIG_DIALOG_WIDTH - x_dialog_border)) / ORIG_LPIX + x_dialog_border;
+       // To simulate Vista large fonts on XP: set font size to large, set lpix_per_inch to
+       // 120, and change "MS Shell Dlg" font size to 10 in quickman.rc. Seems almost exact.
+       // lpix_per_inch = 120;
 
-         // Initially, see if things fit in a dialog that's the same height as the main window
-         dialog_h = ORIG_DIALOG_HEIGHT + YBORDER_ADJUSTMENT;
+       // The seems to be no documented function to help figure out how a dialog box width
+       // should scale with font size. The calc. below usually turns out too wide. Will be
+       // corrected in an iterative process below...
 
-         // With pathologically large fonts, could fail to make a decent box- just give up
-         // after a certain number of tries
-         max_tries = 3;
+       dialog_w = (lpix_per_inch * (ORIG_DIALOG_WIDTH - x_dialog_border)) / ORIG_LPIX + x_dialog_border;
 
-         do
-         {
-            SetWindowPos(hwnd, HWND_TOP, 0, 0, dialog_w, dialog_h, SWP_NOMOVE | SWP_HIDEWINDOW);
-            GetWindowRect(hwnd, &rc_dialog); // get adjusted dialog rect
+       // Initially, see if things fit in a dialog that's the same height as the main window
+       dialog_h = ORIG_DIALOG_HEIGHT + YBORDER_ADJUSTMENT;
 
-            // Dialog item positions are relative to dialog box coords. y = 0 is the topmost pixel in the
-            // dialog (inside the border). Last_ypixel is the bottommost pixel in the dialog. These seem
-            // to be the right calculations...
+       // With pathologically large fonts, could fail to make a decent box- just give up
+       // after a certain number of tries
+       max_tries = 3;
 
-            last_ypixel = rc_dialog.bottom - rc_dialog.top - y_dialog_border - 1;
+       do
+       {
+           SetWindowPos(hwnd, HWND_TOP, 0, 0, dialog_w, dialog_h, SWP_NOMOVE | SWP_HIDEWINDOW);
+           GetWindowRect(hwnd, &rc_dialog); // get adjusted dialog rect
 
-            GetWindowRect(hwnd_status, &rc_status);      // get status line rect
-            text_h = rc_status.bottom - rc_status.top;   // height of status line text
+           // Dialog item positions are relative to dialog box coords. y = 0 is the topmost pixel in the
+           // dialog (inside the border). Last_ypixel is the bottommost pixel in the dialog. These seem
+           // to be the right calculations...
 
-            #define TEXT_TO_BOTTOM_SPACE  3 // some fine-tuning constants
-            #define TEXT_TO_FRAME_SPACE   6
-            #define FRAME_TO_DIALOG_SPACE 6 // distance to dialog edges from each vertical side of frame
+           last_ypixel = rc_dialog.bottom - rc_dialog.top - y_dialog_border - 1;
 
-            text_h += TEXT_TO_BOTTOM_SPACE;
+           GetWindowRect(hwnd_status, &rc_status);      // get status line rect
+           text_h = rc_status.bottom - rc_status.top;   // height of status line text
 
-            // Adjust status1/status2 ypos so they're just above the bottom of the dialog
-            SetWindowPos(hwnd_status, HWND_TOP, ORIG_STATUS_X, last_ypixel - text_h, 0, 0, SWP_NOSIZE);
+#define TEXT_TO_BOTTOM_SPACE  3 // some fine-tuning constants
+#define TEXT_TO_FRAME_SPACE   6
+#define FRAME_TO_DIALOG_SPACE 6 // distance to dialog edges from each vertical side of frame
 
-            GetWindowRect(hwnd_status2, &rc_status);        // get status2 line rect
-            text_w = rc_status.right - rc_status.left + 4;  // not sure why this width is off by a few pixels
+           text_h += TEXT_TO_BOTTOM_SPACE;
 
-            // Get thumbnail frame rectangle
-            GetWindowRect(hwnd_thumbnail_frame, &rc_tframe);
+           // Adjust status1/status2 ypos so they're just above the bottom of the dialog
+           SetWindowPos(hwnd_status, HWND_TOP, ORIG_STATUS_X, last_ypixel - text_h, 0, 0, SWP_NOSIZE);
 
-            // Adjust status2 xpos so its right lines up with the thumbnail frame right
-            SetWindowPos(hwnd_status2, HWND_TOP, rc_tframe.right - rc_dialog.left - text_w,
-                         last_ypixel - text_h, 0, 0, SWP_NOSIZE);
+           GetWindowRect(hwnd_status2, &rc_status);        // get status2 line rect
+           text_w = rc_status.right - rc_status.left + 4;  // not sure why this width is off by a few pixels
 
-            // Adjust height of thumbnail frame so its bottom is just above the status line top
-            SetWindowPos(hwnd_thumbnail_frame, HWND_TOP, 0, 0, frame_w = rc_tframe.right - rc_tframe.left,
-                         frame_h = rc_dialog.bottom - rc_tframe.top - text_h - TEXT_TO_FRAME_SPACE,
-                         SWP_NOMOVE);
+           // Get thumbnail frame rectangle
+           GetWindowRect(hwnd_thumbnail_frame, &rc_tframe);
 
-            done = 1;
+           // Adjust status2 xpos so its right lines up with the thumbnail frame right
+           SetWindowPos(hwnd_status2, HWND_TOP, rc_tframe.right - rc_dialog.left - text_w,
+               last_ypixel - text_h, 0, 0, SWP_NOSIZE);
 
-            // If dialog is too wide or too narrow, adjust to frame width and start over
-            if (dialog_w != (frame_w += 2 * (lpix_per_inch * FRAME_TO_DIALOG_SPACE) / ORIG_LPIX + x_dialog_border))
-            {
+           // Adjust height of thumbnail frame so its bottom is just above the status line top
+           SetWindowPos(hwnd_thumbnail_frame, HWND_TOP, 0, 0, frame_w = rc_tframe.right - rc_tframe.left,
+               frame_h = rc_dialog.bottom - rc_tframe.top - text_h - TEXT_TO_FRAME_SPACE,
+               SWP_NOMOVE);
+
+           done = 1;
+
+           // If dialog is too wide or too narrow, adjust to frame width and start over
+           if (dialog_w != (frame_w += 2 * (lpix_per_inch * FRAME_TO_DIALOG_SPACE) / ORIG_LPIX + x_dialog_border))
+           {
                dialog_w = frame_w;
                done = 0;
-            }
+           }
 
-            // If frame height is too small, increase dialog height and start over
-            if (frame_h < TFRAME_MIN_HEIGHT)
-            {
+           // If frame height is too small, increase dialog height and start over
+           if (frame_h < TFRAME_MIN_HEIGHT)
+           {
                dialog_h += TFRAME_MIN_HEIGHT - frame_h;
                done = 0;
-            }
-         }
-         while (!done && --max_tries);
-         return FALSE;
+           }
+       } while (!done && --max_tries);
+       return FALSE;
 
+      
       case WM_VSCROLL: // Update iterations from spin control
          if ((HWND) lParam == GetDlgItem(hwnd, IDC_ADJUST_ITERS))
          {

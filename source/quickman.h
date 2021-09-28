@@ -54,7 +54,7 @@
 
 #define NUM_ELEM(a) (sizeof(a) / sizeof(a[0]))
 
-#define MAX_THREADS_IND     5 // Set this to set maximum number of threads (== 2^this)
+#define MAX_THREADS_IND     6 // Set this to set maximum number of threads (== 2^this)
 #define MAX_THREADS        (1 << MAX_THREADS_IND)
 
 // Max threads that can be running at once, with save going on in the background
