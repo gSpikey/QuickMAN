@@ -26,3 +26,5 @@ copy zlib\zconf.h .
 copy zlib\zlib.h .
 copy zlib\zutil.c .
 copy zlib\zutil.h .
+copy zlib\gzguts.h .
+
