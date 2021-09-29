@@ -85,3 +85,6 @@ source/zconf.h
 source/zlib.h
 source/zutil.c
 source/zutil.h
+source/.vs/quickman/v16/Browse.VC.db-shm
+source/.vs/quickman/v16/Browse.VC.db-wal
+source/.vs/quickman/v16/Browse.VC.opendb
